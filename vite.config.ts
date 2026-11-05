@@ -13,7 +13,7 @@ export default defineConfig({
       registerType: "autoUpdate",
       includeAssets: ["apple-touch-icon.png"],
       manifest: {
-        name: "Ma PAL — Deux lectures pour un achat",
+        name: "Mon Grimoire de PAL",
         short_name: "Ma PAL",
         lang: "fr",
         start_url: "./",

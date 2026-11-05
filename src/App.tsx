@@ -2,7 +2,9 @@ import React, { useEffect, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { ResponsiveContainer, LineChart, Line, XAxis, YAxis, Tooltip } from "recharts";
 
-type Entry = { id: string; type: "lu" | "achat"; format: "physique" | "numerique"; title: string; date: string };
+type Format = "physique" | "numerique";
+type Entry = { id: string; type: "commence" | "lu" | "abandonne" | "achat"; format: Format; title: string; date: string; palImpact?: boolean };
+type EnCours = { id: string; title: string; format: Format };
 
 const STORAGE_KEY = "pal-tracker-v1";
 
@@ -31,13 +33,16 @@ const inputStyle: React.CSSProperties = {
   color: THEME.encre,
 };
 
+const aujourdhui = () => new Date().toLocaleDateString("fr-FR", { day: "numeric", month: "short" });
+
 export default function App() {
   const [loaded, setLoaded] = useState(false);
   const [pal, setPal] = useState(15);
   const [lusDepuisAchat, setLusDepuisAchat] = useState(0);
   const [historique, setHistorique] = useState<Entry[]>([]);
-  const [titreLu, setTitreLu] = useState("");
-  const [formatLu, setFormatLu] = useState<"physique" | "numerique">("physique");
+  const [enCours, setEnCours] = useState<EnCours[]>([]);
+  const [titre, setTitre] = useState("");
+  const [format, setFormat] = useState<Format>("physique");
   const [titreAchat, setTitreAchat] = useState("");
   const [celebrate, setCelebrate] = useState(false);
 
@@ -49,6 +54,7 @@ export default function App() {
         if (typeof d.pal === "number") setPal(d.pal);
         if (typeof d.lusDepuisAchat === "number") setLusDepuisAchat(d.lusDepuisAchat);
         if (Array.isArray(d.historique)) setHistorique(d.historique);
+        if (Array.isArray(d.enCours)) setEnCours(d.enCours);
       }
     } catch (e) {}
     setLoaded(true);
@@ -59,18 +65,20 @@ export default function App() {
     try {
       localStorage.setItem(
         STORAGE_KEY,
-        JSON.stringify({ pal, lusDepuisAchat, historique })
+        JSON.stringify({ pal, lusDepuisAchat, historique, enCours })
       );
     } catch (e) {}
-  }, [pal, lusDepuisAchat, historique, loaded]);
+  }, [pal, lusDepuisAchat, historique, enCours, loaded]);
 
   const achatsAutorises = Math.floor(lusDepuisAchat / 2);
   const progres = (lusDepuisAchat % 2) / 2;
 
-  const ajouterLu = () => {
-    const t = titreLu.trim() || "Un livre terminé 📖";
-    if (formatLu === "physique" && pal > 0) setPal(pal - 1);
-    if (formatLu === "physique") {
+  /* — Livre commencé : il sort de la PAL et fait avancer le pacte — */
+  const commencerLivre = () => {
+    const t = titre.trim();
+    if (!t) return;
+    if (format === "physique") {
+      if (pal > 0) setPal(pal - 1);
       const nouveau = lusDepuisAchat + 1;
       setLusDepuisAchat(nouveau);
       if (nouveau % 2 === 0) {
@@ -78,18 +86,41 @@ export default function App() {
         setTimeout(() => setCelebrate(false), 3500);
       }
     }
+    setEnCours((l) => [...l, { id: crypto.randomUUID(), title: t, format }]);
     setHistorique((h) => [
-      { id: crypto.randomUUID(), type: "lu", format: formatLu, title: t, date: new Date().toLocaleDateString("fr-FR", { day: "numeric", month: "short" }) },
+      { id: crypto.randomUUID(), type: "commence", format, title: t, date: aujourdhui(), palImpact: format === "physique" },
       ...h,
     ]);
-    setTitreLu("");
+    setTitre("");
+  };
+
+  /* — Lecture en cours terminée — */
+  const terminerLivre = (id: string) => {
+    const l = enCours.find((x) => x.id === id);
+    if (!l) return;
+    setEnCours((c) => c.filter((x) => x.id !== id));
+    setHistorique((h) => [
+      { id: crypto.randomUUID(), type: "lu", format: l.format, title: l.title, date: aujourdhui(), palImpact: false },
+      ...h,
+    ]);
+  };
+
+  /* — Abandonné : quitte les lectures en cours, sans culpabilité — */
+  const abandonnerLivre = (id: string) => {
+    const l = enCours.find((x) => x.id === id);
+    if (!l) return;
+    setEnCours((c) => c.filter((x) => x.id !== id));
+    setHistorique((h) => [
+      { id: crypto.randomUUID(), type: "abandonne", format: l.format, title: l.title, date: aujourdhui(), palImpact: false },
+      ...h,
+    ]);
   };
 
   const ajouterAchat = () => {
-    const t = titreAchat.trim() || "Nouveau livre 🕯️";
+    const t = titreAchat.trim() || "Nouveau livre 🗝️";
     setPal(pal + 1);
     setHistorique((h) => [
-      { id: crypto.randomUUID(), type: "achat", format: "physique", title: t, date: new Date().toLocaleDateString("fr-FR", { day: "numeric", month: "short" }) },
+      { id: crypto.randomUUID(), type: "achat", format: "physique", title: t, date: aujourdhui() },
       ...h,
     ]);
     setTitreAchat("");
@@ -98,11 +129,17 @@ export default function App() {
   const annuler = (id: string) => {
     const e = historique.find((x) => x.id === id);
     if (!e) return;
-    if (e.type === "lu" && e.format === "physique") {
-      setPal((p) => p + 1);
-      setLusDepuisAchat((n) => Math.max(0, n - 1));
-    } else if (e.type === "achat") {
+    if (e.type === "achat") {
       setPal((p) => Math.max(0, p - 1));
+    } else if (e.type === "commence") {
+      if (e.palImpact) {
+        setPal((p) => p + 1);
+        setLusDepuisAchat((n) => Math.max(0, n - 1));
+      }
+      setEnCours((c) => c.filter((x) => x.title !== e.title));
+    } else if (e.type === "lu" && e.palImpact !== false && e.format === "physique") {
+      setLusDepuisAchat((n) => Math.max(0, n - 1));
+      setPal((p) => p + 1); // anciennes entrées
     }
     setHistorique((h) => h.filter((x) => x.id !== id));
   };
@@ -110,31 +147,50 @@ export default function App() {
   const livresPal = Math.min(pal, 24);
   const livresPalLu = Math.min(lusDepuisAchat % 2, 2);
 
-  const lusPhysique = historique.filter((e) => e.type === "lu" && e.format === "physique").length;
-  const nbAchats = historique.filter((e) => e.type === "achat").length;
+  /* — Sorties de PAL (livres commencés physiques) — */
+  const sortiesDePal = historique.filter(
+    (e) => e.type === "commence" && e.palImpact === true
+  ).length + historique.filter((e) => e.type === "lu" && e.palImpact !== false && e.format === "physique").length;
 
+  const nbAchats = historique.filter((e) => e.type === "achat").length;
+  const nbLus = historique.filter((e) => e.type === "lu").length;
+
+  /* — Trophées de sorcière 🧙‍♀️ — */
   const badges = [
-    { id: "premier", emoji: "🕯️", nom: "Première Flamme", desc: "Terminer son 1er livre de la PAL", obtenu: lusPhysique >= 1 },
-    { id: "cinq", emoji: "🌿", nom: "Main Verte", desc: "5 livres de la PAL terminés", obtenu: lusPhysique >= 5 },
-    { id: "dix", emoji: "🌳", nom: "Racine Solide", desc: "10 livres de la PAL terminés", obtenu: lusPhysique >= 10 },
-    { id: "vingt", emoji: "🦉", nom: "Sage de la Forêt", desc: "20 livres de la PAL terminés", obtenu: lusPhysique >= 20 },
-    { id: "cle", emoji: "🗝️", nom: "Clef Honorée", desc: "1er achat débloqué par le pacte", obtenu: nbAchats >= 1 },
-    { id: "pal5", emoji: "📉", nom: "Pile Amincie", desc: "PAL descendue sous 10", obtenu: pal < 10 },
-    { id: "pal0", emoji: "🏆", nom: "PAL Zéro", desc: "Vider entièrement sa pile", obtenu: pal === 0 },
+    { id: "chandelle", emoji: "🕯️", nom: "La Première Chandelle du Sabbat", desc: "1er livre sorti de la PAL", obtenu: sortiesDePal >= 1 },
+    { id: "sortilege", emoji: "🌱", nom: "Le Sortilège Appris", desc: "2 livres sortis de la PAL", obtenu: sortiesDePal >= 2 },
+    { id: "apprentie", emoji: "🌿", nom: "Apprentie du Grimoire", desc: "5 livres sortis de la PAL", obtenu: sortiesDePal >= 5 },
+    { id: "incantatrice", emoji: "🌳", nom: "L'Incantatrice", desc: "10 livres sortis de la PAL", obtenu: sortiesDePal >= 10 },
+    { id: "sibylle", emoji: "🦉", nom: "La Sibylle Occulte", desc: "20 livres sortis de la PAL", obtenu: sortiesDePal >= 20 },
+    { id: "cle", emoji: "🗝️", nom: "La Première Clé du Coffre", desc: "1er achat mérité par le pacte", obtenu: nbAchats >= 1 },
+    { id: "malefice", emoji: "🕸️", nom: "Maléfice Enchanté", desc: "PAL descendue sous 10", obtenu: pal < 10 },
+    { id: "voile", emoji: "🌫️", nom: "Le Voile se Lève", desc: "PAL descendue sous 5", obtenu: pal < 5 },
+    { id: "oeuvre", emoji: "🏆", nom: "Le Grand Œuvre Accompli", desc: "Vider entièrement la pile", obtenu: pal === 0 },
+    { id: "etincelle", emoji: "✨", nom: "Étincelle Magique", desc: "1er livre terminé", obtenu: nbLus >= 1 },
+    { id: "croissant", emoji: "🌘", nom: "Croissant Envoûté", desc: "5 livres terminés", obtenu: nbLus >= 5 },
+    { id: "potion", emoji: "🌕", nom: "Potion de Pleine Lune", desc: "10 livres terminés", obtenu: nbLus >= 10 },
+    { id: "comete", emoji: "🌠", nom: "Comète des Sortilèges", desc: "20 livres terminés", obtenu: nbLus >= 20 },
+    { id: "dragon", emoji: "🐉", nom: "Le Dragon du Grimoire", desc: "50 livres terminés", obtenu: nbLus >= 50 },
   ];
   const badgesObtenus = badges.filter((b) => b.obtenu).length;
 
-  // Série : livres lus depuis le dernier achat
+  /* — Série : livres sortis de la PAL depuis le dernier achat — */
   const serieLivres = (() => {
+    const estSortie = (e: Entry) => (e.type === "commence" && e.palImpact === true) || (e.type === "lu" && e.palImpact !== false && e.format === "physique");
     const idxAchat = historique.findIndex((e) => e.type === "achat");
     return idxAchat === -1
-      ? historique.filter((e) => e.type === "lu").length
-      : historique.slice(0, idxAchat).filter((e) => e.type === "lu").length;
+      ? historique.filter(estSortie).length
+      : historique.slice(0, idxAchat).filter(estSortie).length;
   })();
 
-  // Trajectoire de la PAL : reconstruite depuis le registre (ordre chrono inversé)
+  /* — Trajectoire de la PAL — */
+  const delta = (e: Entry) => {
+    if (e.type === "achat") return 1;
+    if (e.type === "commence") return e.palImpact ? -1 : 0;
+    if (e.type === "lu") return e.palImpact === false ? 0 : -1; // anciennes entrées
+    return 0;
+  };
   const trajectoire = (() => {
-    const delta = (e: Entry) => (e.type === "achat" ? 1 : e.format === "physique" ? -1 : 0);
     const total = historique.reduce((s, e) => s + delta(e), 0);
     const points = [
       { nom: "Début", pal: pal - total },
@@ -146,6 +202,15 @@ export default function App() {
     return points;
   })();
   const palInitiale = trajectoire.length > 0 ? trajectoire[0].pal : pal;
+
+  const emojiType = (e: Entry) =>
+    e.type === "commence" ? "🔖" : e.type === "lu" ? "📖" : e.type === "abandonne" ? "⚰️" : "🗝️";
+  const impactPal = (e: Entry) => {
+    if (e.type === "achat") return "+1";
+    if (e.type === "commence") return e.palImpact ? "−1" : "±0";
+    if (e.type === "lu") return e.palImpact === false ? "±0" : "−1";
+    return "±0";
+  };
 
   return (
     <div
@@ -167,7 +232,7 @@ export default function App() {
           className="text-4xl font-bold tracking-[0.15em] uppercase"
           style={{ color: THEME.or, textShadow: "0 2px 8px rgba(0,0,0,0.6)" }}
         >
-          Ma PAL
+          Mon Grimoire de PAL
         </h1>
         <p className="text-sm italic mt-2 tracking-wide" style={{ color: "#c9bfa8" }}>
           Deux lectures pour un achat — tel est le pacte ✨
@@ -179,10 +244,7 @@ export default function App() {
 
       {/* Compteur PAL */}
       <motion.div layout className="w-full max-w-md p-6 text-center" style={cardStyle}>
-        <p
-          className="text-xs uppercase tracking-[0.3em] mb-3"
-          style={{ color: THEME.burgundy }}
-        >
+        <p className="text-xs uppercase tracking-[0.3em] mb-3" style={{ color: THEME.burgundy }}>
           La Pile à Lire
         </p>
         <AnimatePresence mode="popLayout">
@@ -199,10 +261,10 @@ export default function App() {
         </AnimatePresence>
         <p className="text-sm mt-2 italic" style={{ color: THEME.encre }}>
           {pal === 0
-            ? "Pile épuisée — la bibliothèque t'applaudit 🌿"
+            ? "Pile épuisée — le Grand Œuvre est accompli ! 🧙‍♀️"
             : pal <= 5
-            ? "Plus que quelques volumes, tu y es presque…"
-            : "Un livre à la fois, la pile s'allège 🍃"}
+            ? "Plus que quelques volumes, le Voile se lève…"
+            : "Un livre commencé, un livre sorti de la pile 🍃"}
         </p>
         <div className="flex justify-center flex-wrap gap-1 mt-4">
           {Array.from({ length: livresPal }).map((_, i) => (
@@ -243,8 +305,8 @@ export default function App() {
             </p>
             <p className="text-sm italic" style={{ color: THEME.encre }}>
               {serieLivres === 0
-                ? "Ta série démarre à ta prochaine lecture 🌱"
-                : `${serieLivres} livre${serieLivres > 1 ? "s" : ""} lu${serieLivres > 1 ? "s" : ""} depuis ton dernier achat`}
+                ? "Ta série démarre à ta prochaine pile entamée 🌱"
+                : `${serieLivres} livre${serieLivres > 1 ? "s" : ""} sorti${serieLivres > 1 ? "s" : ""} de la PAL depuis ton dernier achat`}
             </p>
           </div>
         </div>
@@ -261,16 +323,13 @@ export default function App() {
 
       {/* Graphique PAL */}
       <motion.div layout className="w-full max-w-md p-6" style={cardStyle}>
-        <p
-          className="text-xs uppercase tracking-[0.3em] mb-1"
-          style={{ color: THEME.burgundy }}
-        >
+        <p className="text-xs uppercase tracking-[0.3em] mb-1" style={{ color: THEME.burgundy }}>
           Évolution de la Pile 📉
         </p>
         <p className="text-xs italic mb-3" style={{ color: THEME.brume }}>
           {historique.length === 0
             ? "La courbe naîtra à ton premier livre consigné…"
-            : `De ${palInitiale} à ${pal} — continue, elle ne connaît qu'une direction : le bas 🌿`}
+            : `De ${palInitiale} à ${pal} — la transmutation est en cours 🧙‍♀️`}
         </p>
         <div className="h-44 w-full">
           <ResponsiveContainer width="100%" height="100%">
@@ -290,21 +349,14 @@ export default function App() {
 
       {/* Barre "2 lus = 1 achat" */}
       <motion.div layout className="w-full max-w-md p-6" style={cardStyle}>
-        <p
-          className="text-xs uppercase tracking-[0.3em] mb-4 text-center"
-          style={{ color: THEME.burgundy }}
-        >
+        <p className="text-xs uppercase tracking-[0.3em] mb-4 text-center" style={{ color: THEME.burgundy }}>
           Prochain achat en vue 👀
         </p>
         <div className="flex items-center justify-center gap-5">
           {[0, 1].map((slot) => (
             <motion.div
               key={slot}
-              animate={
-                livresPalLu > slot
-                  ? { scale: [1, 1.25, 1], rotate: [0, -8, 8, 0] }
-                  : { scale: 1 }
-              }
+              animate={livresPalLu > slot ? { scale: [1, 1.25, 1], rotate: [0, -8, 8, 0] } : { scale: 1 }}
               transition={{ duration: 0.5 }}
               className="w-11 h-14 rounded-sm flex items-center justify-center text-2xl"
               style={{
@@ -327,10 +379,7 @@ export default function App() {
             {achatsAutorises > 0 ? "🗝️" : "🔒"}
           </div>
         </div>
-        <div
-          className="mt-5 h-3 overflow-hidden"
-          style={{ background: "#d8ceb8", border: `1px solid ${THEME.brume}` }}
-        >
+        <div className="mt-5 h-3 overflow-hidden" style={{ background: "#d8ceb8", border: `1px solid ${THEME.brume}` }}>
           <motion.div
             className="h-full"
             style={{ background: `linear-gradient(90deg, ${THEME.vertFonce}, ${THEME.or})` }}
@@ -339,34 +388,75 @@ export default function App() {
         </div>
         <p className="text-center text-sm mt-3 italic" style={{ color: THEME.encre }}>
           {achatsAutorises > 0
-            ? `🗝️ ${achatsAutorises} achat${achatsAutorises > 1 ? "s" : ""} autorisé${achatsAutorises > 1 ? "s" : ""} — la clef est à toi !`
+            ? `🗝️ ${achatsAutorises} achat${achatsAutorises > 1 ? "s" : ""} autorisé${achatsAutorises > 1 ? "s" : ""} — la Clé du Coffre est à toi !`
             : progres > 0
-            ? "Encore une lecture et le coffre s'ouvre…"
-            : "Deux lectures avant le prochain achat 📖"}
+            ? "Encore un livre commencé et le coffre s'ouvre…"
+            : "Deux livres sortis de la pile avant le prochain achat 📖"}
         </p>
       </motion.div>
 
-      {/* Formulaire lecture */}
+      {/* Lectures en cours */}
       <motion.div layout className="w-full max-w-md p-6" style={cardStyle}>
-        <p
-          className="text-xs uppercase tracking-[0.3em] mb-1"
-          style={{ color: THEME.burgundy }}
-        >
-          J'ai fini un livre 🎊
+        <p className="text-xs uppercase tracking-[0.3em] mb-1" style={{ color: THEME.burgundy }}>
+          Lectures en cours 🔖
         </p>
         <p className="text-xs italic mb-3" style={{ color: THEME.brume }}>
-          Seuls les livres physiques 📕 comptent pour la PAL et les « 2 lus » — le numérique 📱 est seulement consigné
+          {enCours.length === 0
+            ? "Aucune lecture en cours… le grimoire attend sa prochaine page 🪶"
+            : `${enCours.length} livre${enCours.length > 1 ? "s" : ""} entre tes mains : scelle leur sort quand tu veux ✦`}
+        </p>
+        <ul className="flex flex-col gap-2">
+          <AnimatePresence>
+            {enCours.map((l) => (
+              <motion.li
+                key={l.id}
+                initial={{ opacity: 0, x: -20 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: 20 }}
+                className="flex items-center gap-2 px-3 py-2"
+                style={{ background: "#eae4cd", border: `1px solid #c5c0a5`, color: THEME.encre }}
+              >
+                <span className="text-lg">{l.format === "physique" ? "📕" : "📱"}</span>
+                <span className="flex-1 truncate text-sm font-semibold">{l.title}</span>
+                <button
+                  onClick={() => abandonnerLivre(l.id)}
+                  className="text-xs italic px-2 py-1"
+                  style={{ color: THEME.brume }}
+                  title="Abandonné sans culpabilité"
+                >
+                  ⚰️
+                </button>
+                <button
+                  onClick={() => terminerLivre(l.id)}
+                  className="text-xs font-semibold px-3 py-1"
+                  style={{ background: THEME.vertFonce, color: THEME.parchemin, border: `1px solid ${THEME.or}` }}
+                >
+                  Terminé ✦
+                </button>
+              </motion.li>
+            ))}
+          </AnimatePresence>
+        </ul>
+      </motion.div>
+
+      {/* Formulaire livre commencé */}
+      <motion.div layout className="w-full max-w-md p-6" style={cardStyle}>
+        <p className="text-xs uppercase tracking-[0.3em] mb-1" style={{ color: THEME.burgundy }}>
+          Je commence un livre 🔖
+        </p>
+        <p className="text-xs italic mb-3" style={{ color: THEME.brume }}>
+          Il rejoint tes lectures en cours et <b>sort de la PAL</b> 🍃 — seuls les livres physiques 📕 en sortent
         </p>
         <div className="flex gap-2 mb-3">
           {([["physique", "📕 Physique"], ["numerique", "📱 Numérique"]] as const).map(([f, label]) => (
             <button
               key={f}
-              onClick={() => setFormatLu(f)}
+              onClick={() => setFormat(f)}
               className="px-4 py-1.5 text-sm font-semibold"
               style={{
-                background: formatLu === f ? THEME.vertFonce : "transparent",
-                color: formatLu === f ? THEME.parchemin : THEME.encre,
-                border: `1px solid ${formatLu === f ? THEME.or : THEME.brume}`,
+                background: format === f ? THEME.vertFonce : "transparent",
+                color: format === f ? THEME.parchemin : THEME.encre,
+                border: `1px solid ${format === f ? THEME.or : THEME.brume}`,
               }}
             >
               {label}
@@ -375,29 +465,26 @@ export default function App() {
         </div>
         <div className="flex gap-2">
           <input
-            value={titreLu}
-            onChange={(e) => setTitreLu(e.target.value)}
-            placeholder="Titre du livre (optionnel)"
+            value={titre}
+            onChange={(e) => setTitre(e.target.value)}
+            placeholder="Titre du livre"
             className="flex-1 min-w-0 px-3 py-2 text-base outline-none"
             style={inputStyle}
-            onKeyDown={(e) => e.key === "Enter" && ajouterLu()}
+            onKeyDown={(e) => e.key === "Enter" && commencerLivre()}
           />
           <button
-            onClick={ajouterLu}
+            onClick={commencerLivre}
             className="px-4 py-2 text-sm font-semibold"
             style={{ background: THEME.vertFonce, color: THEME.parchemin, border: `1px solid ${THEME.or}` }}
           >
-            Lu ! ✦
+            Commencer ✦
           </button>
         </div>
       </motion.div>
 
       {/* Formulaire achat */}
       <motion.div layout className="w-full max-w-md p-6" style={cardStyle}>
-        <p
-          className="text-xs uppercase tracking-[0.3em] mb-3"
-          style={{ color: THEME.burgundy }}
-        >
+        <p className="text-xs uppercase tracking-[0.3em] mb-3" style={{ color: THEME.burgundy }}>
           Nouvel achat 🛒 (+1 à la PAL)
         </p>
         <div className="flex gap-2">
@@ -418,7 +505,7 @@ export default function App() {
               border: `1px solid ${achatsAutorises > 0 ? THEME.or : THEME.brume}`,
               cursor: achatsAutorises > 0 ? "pointer" : "not-allowed",
             }}
-            title={achatsAutorises === 0 ? "Encore 2 livres à lire d'abord 😉" : ""}
+            title={achatsAutorises === 0 ? "Encore 2 lectures terminées d'abord 😉" : ""}
           >
             Acheté 🗝️
           </button>
@@ -430,16 +517,13 @@ export default function App() {
         )}
       </motion.div>
 
-      {/* Mur des récompenses */}
+      {/* Mur des trophées */}
       <motion.div layout className="w-full max-w-md p-6" style={cardStyle}>
-        <p
-          className="text-xs uppercase tracking-[0.3em] mb-1"
-          style={{ color: THEME.burgundy }}
-        >
-          Salle des Trophées 🏆
+        <p className="text-xs uppercase tracking-[0.3em] mb-1" style={{ color: THEME.burgundy }}>
+          La Salle des Trophées 🏆
         </p>
         <p className="text-xs italic mb-4" style={{ color: THEME.brume }}>
-          {badgesObtenus} / {badges.length} récompenses conquises — la gloire se mérite livre après livre ✦
+          {badgesObtenus} / {badges.length} sortilèges accomplis — {sortiesDePal} livre{sortiesDePal > 1 ? "s" : ""} sorti{sortiesDePal > 1 ? "s" : ""} de la PAL à ce jour ✦
         </p>
         <div className="h-2 mb-4 overflow-hidden" style={{ background: "#d8ceb8", border: `1px solid ${THEME.brume}` }}>
           <motion.div
@@ -471,15 +555,12 @@ export default function App() {
 
       {/* Historique */}
       <motion.div layout className="w-full max-w-md p-6" style={cardStyle}>
-        <p
-          className="text-xs uppercase tracking-[0.3em] mb-2"
-          style={{ color: THEME.burgundy }}
-        >
+        <p className="text-xs uppercase tracking-[0.3em] mb-2" style={{ color: THEME.burgundy }}>
           Le Grand Registre ({historique.length})
         </p>
         <div className="flex justify-center gap-4 text-xs italic mb-3" style={{ color: THEME.brume }}>
-          <span>📖 {historique.filter((e) => e.type === "lu").length} lus</span>
-          <span>🗝️ {historique.filter((e) => e.type === "achat").length} achats</span>
+          <span>📖 {nbLus} terminé{nbLus > 1 ? "s" : ""}</span>
+          <span>🗝️ {nbAchats} achat{nbAchats > 1 ? "s" : ""}</span>
         </div>
         {historique.length === 0 ? (
           <p className="text-sm italic text-center py-4" style={{ color: THEME.brume }}>
@@ -494,39 +575,23 @@ export default function App() {
                   initial={{ opacity: 0, x: -20 }}
                   animate={{ opacity: 1, x: 0 }}
                   exit={{ opacity: 0, x: 20 }}
-                  className="flex items-center gap-3 px-3 py-2 text-sm"
+                  className="flex items-center gap-2 px-3 py-2 text-sm"
                   style={{
-                    background: e.type === "lu" ? "#eae4cd" : "#e9dcd3",
-                    border: `1px solid ${e.type === "lu" ? "#c5c0a5" : "#d3b8ac"}`,
+                    background: e.type === "lu" ? "#eae4cd" : e.type === "abandonne" ? "#e4dcd6" : "#e9dcd3",
+                    border: `1px solid ${e.type === "lu" ? "#c5c0a5" : e.type === "abandonne" ? "#c8bcb2" : "#d3b8ac"}`,
                     color: THEME.encre,
                   }}
                 >
-                  <span className="text-lg">{e.type === "lu" ? (e.format === "physique" ? "📕" : "📱") : "🗝️"}</span>
+                  <span className="text-lg">{emojiType(e)}</span>
                   <span
                     className="text-[10px] font-bold px-1.5 py-0.5 rounded-sm"
                     style={{
-                      background:
-                        e.type === "achat"
-                          ? "#e9dcd3"
-                          : e.format === "physique"
-                          ? "#e2e8d5"
-                          : "#ddd4bd",
-                      color:
-                        e.type === "achat"
-                          ? THEME.burgundy
-                          : e.format === "physique"
-                          ? THEME.vertFonce
-                          : THEME.brume,
-                      border: `1px solid ${
-                        e.type === "achat"
-                          ? "#d3b8ac"
-                          : e.format === "physique"
-                          ? "#c2cfae"
-                          : THEME.brume
-                      }`,
+                      background: e.type === "achat" ? "#e9dcd3" : e.type === "commence" && e.palImpact ? "#e2e8d5" : "#ddd4bd",
+                      color: e.type === "achat" ? THEME.burgundy : e.type === "commence" && e.palImpact ? THEME.vertFonce : THEME.brume,
+                      border: `1px solid ${e.type === "achat" ? "#d3b8ac" : e.type === "commence" && e.palImpact ? "#c2cfae" : THEME.brume}`,
                     }}
                   >
-                    {e.type === "achat" ? "+1" : e.format === "physique" ? "−1" : "±0"}
+                    {impactPal(e)}
                   </span>
                   <span className="flex-1 truncate">{e.title}</span>
                   <span className="text-xs" style={{ color: THEME.brume }}>{e.date}</span>
@@ -566,7 +631,7 @@ export default function App() {
                 animate={{ y: "110vh", opacity: 0, rotate: 360 }}
                 transition={{ duration: 2.5 + (i % 5) * 0.4, delay: (i % 7) * 0.1 }}
               >
-                {["✨", "✦", "🌿", "🕯️"][i % 4]}
+                {["✨", "✦", "🕯️", "🗝️"][i % 4]}
               </motion.span>
             ))}
             <motion.div
@@ -585,10 +650,10 @@ export default function App() {
               >
                 <p className="text-4xl mb-2">🗝️✨🗝️</p>
                 <p className="text-lg font-bold uppercase tracking-[0.2em]" style={{ color: THEME.burgundy }}>
-                  Achat autorisé !
+                  La Clé du Coffre !
                 </p>
                 <p className="text-sm italic mt-1" style={{ color: THEME.encre }}>
-                  Deux livres lus — le coffre s'ouvre pour toi.
+                  Deux lectures terminées — le pacte t'ouvre ses trésors.
                 </p>
               </div>
             </motion.div>
